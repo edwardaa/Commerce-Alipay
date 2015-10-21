@@ -36,7 +36,7 @@ function commerce_alipay_schema() {
         'default' => '',
       ),
       'seller_email' => array(
-        'description' => 'The e-mail of the payment receiever.',
+        'description' => 'The e-mail of the payment receiver.',
         'type' => 'varchar',
         'length' => 255,
         'not null' => TRUE,

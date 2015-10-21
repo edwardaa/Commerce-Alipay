@@ -95,7 +95,7 @@ function commerce_alipay_ipn_url($instance_id) {
  * @return string
  *   'success' or 'fail' indicating whether the IPN was successfully processed or not.
  */
-function ecommerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array()) {
+function commerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array()) {
   // Retrieve the IPN from $_POST if the caller did not supply an IPN array.
   // Note that Drupal has already run stripslashes() on the content of the
   // $_POST array st this point, so we don't need to worry about them.
