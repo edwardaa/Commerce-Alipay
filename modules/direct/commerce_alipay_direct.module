@@ -47,14 +47,14 @@ function commerce_alipay_direct_settings_form($settings = array()) {
     '#title' => t('Alipay partner ID'),
     '#description' => t('The number starting with 2088'),
     '#default_value' => $settings['partner'],
-    '#requred' => TRUE,
+    '#required' => TRUE,
   );
   $form['md5_key'] = array(
     '#type' => 'textfield',
     '#title' => t('Alipay Key'),
     '#description' => t('MD5 sign key'),
     '#default_value' => $settings['md5_key'],
-    '#requred' => TRUE,
+    '#required' => TRUE,
   );
   // Place sign_type in settings form to make $payment_method['settings']['sign_type']
   // available anywhere.
@@ -62,7 +62,7 @@ function commerce_alipay_direct_settings_form($settings = array()) {
     '#type' => 'hidden',
     '#title' => t('Sign type'),
     '#default_value' => $settings['sign_type'],
-    '#requred' => TRUE,
+    '#required' => TRUE,
   );
   $form['ipn_logging'] = array(
     '#type' => 'radios',
