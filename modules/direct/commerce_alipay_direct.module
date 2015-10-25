@@ -49,20 +49,40 @@ function commerce_alipay_direct_settings_form($settings = array()) {
     '#default_value' => $settings['partner'],
     '#required' => TRUE,
   );
+  // Currently only MD5 sign type is supported
+  $form['sign_type'] = array(
+    '#type' => 'radios',
+    '#title' => t('Sign type'),
+    '#options' => array(
+      'MD5' => 'MD5',
+      // 'RSA' => 'RSA',
+    ),
+    '#description' => t('Currently only MD5 sign type is supported.'),
+    '#default_value' => $settings['sign_type'],
+    '#required' => TRUE,
+  );
   $form['md5_key'] = array(
     '#type' => 'textfield',
     '#title' => t('Alipay Key'),
     '#description' => t('MD5 sign key'),
     '#default_value' => $settings['md5_key'],
     '#required' => TRUE,
+    '#states' => array(
+      'visible' => array(
+        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'MD5'),
+      ),
+    ),
   );
-  // Place sign_type in settings form to make $payment_method['settings']['sign_type']
-  // available anywhere.
-  $form['sign_type'] = array(
-    '#type' => 'hidden',
-    '#title' => t('Sign type'),
-    '#default_value' => $settings['sign_type'],
-    '#required' => TRUE,
+  $form['rsa_private'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Alipay RSA private pem'),
+    '#description' => t('RSA private pem file path'),
+    '#default_value' => $settings['rsa_private'],
+    '#states' => array(
+      'visible' => array(
+        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'RSA'),
+      ),
+    ),
   );
   $form['ipn_logging'] = array(
     '#type' => 'radios',
@@ -109,14 +129,10 @@ function commerce_alipay_direct_submit_form($payment_method, $pane_values, $chec
  */
 function commerce_alipay_direct_submit_form_validate($payment_method, $pane_form, $pane_values, $order, $form_parents = array()) {
   // Return an error if the enabling action's settings haven't been configured.
-  foreach (array('partner', 'md5_key', 'sign_type') as $key) {
-    if (empty($payment_method['settings'][$key])) {
-      drupal_set_message(t('Alipay Direct payment is not configured for use. Please contact an administrator to resolve this issue.'), 'error');
-      return FALSE;
-    }
+  if (empty($payment_method['settings']['partner'])) {
+    drupal_set_message(t('Alipay Direct is not configured for use. No Alipay partner has been specified.'), 'error');
+    return FALSE;
   }
-
-  return TRUE;
 }
 
 /**

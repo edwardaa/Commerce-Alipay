@@ -433,12 +433,20 @@ function commerce_alipay_sign(array $data, $settings) {
     }
   }
 
-  // Sort by keys
-  ksort($data);
-
   $params = array();
-  foreach ($data as $key => $value) {
-    $params[] = $key . '=' . $value;
+  if ($settings['sign_type'] == 'MD5') {
+    // Sort by keys
+    ksort($data);
+    foreach ($data as $key => $value) {
+      $params[] = $key . '=' . $value;
+    }
+  }
+  else {
+    foreach ($data as $key => &$value) {
+      // Surround with double quotes.
+      $value = '"' . $value . '"';
+      $params[] = $key . '=' . $value;
+    }
   }
 
   $data_str = implode('&', $params);
@@ -447,17 +455,34 @@ function commerce_alipay_sign(array $data, $settings) {
     case 'MD5':
       $sign = _commerce_alipay_sign_md5($data_str, $settings['md5_key']);
       break;
+    case 'RSA':
+      $sign = _commerce_alipay_sign_rsa($data_str, $settings['rsa_private']);
+      break;
     default:
       $sign = '';
       break;
   }
 
-  $data['sign'] = $sign;
-  $data['sign_type'] = $settings['sign_type'];
+  if ($settings['sign_type'] == 'MD5') {
+    $data['sign'] = $sign;
+    $data['sign_type'] = $settings['sign_type'];
+  }
+  else {
+    // Surround with double quotes.
+    $data['sign'] = '"' . $sign . '"';
+    $data['sign_type'] = '"' . $settings['sign_type'] . '"';
+  }
 
   return $data;
 }
 
 function _commerce_alipay_sign_md5($data_str, $md5_key) {
   return md5($data_str . $md5_key);
+}
+
+function _commerce_alipay_sign_rsa($data_str, $rsa_private_file) {
+  $pkey_id = openssl_get_privatekey('file://'. $rsa_private_file);
+  openssl_sign($data_str, $sign, $pkey_id);
+  openssl_free_key($pkey_id);
+  return urlencode(base64_encode($sign));
 }
