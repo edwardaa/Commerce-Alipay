@@ -484,5 +484,5 @@ function _commerce_alipay_sign_rsa($data_str, $rsa_private_file) {
   $pkey_id = openssl_get_privatekey('file://'. $rsa_private_file);
   openssl_sign($data_str, $sign, $pkey_id);
   openssl_free_key($pkey_id);
-  return urlencode(base64_encode($sign));
+  return drupal_base64_encode($sign);
 }
