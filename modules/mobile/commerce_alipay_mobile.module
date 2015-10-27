@@ -208,7 +208,7 @@ function commerce_alipay_mobile_alipay_ipn_process($order, $payment_method, &$ip
   $transaction->amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
   $transaction->currency_code = ALIPAY_CURRENCY;
   // Append 'trade_status' value to the 'payload' key as two IPNs may has same time
-  $transaction->payload[REQUEST_TIME . '-ipn' . $ipn['trade_status']] = $ipn;
+  $transaction->payload[REQUEST_TIME . '-ipn-' . $ipn['trade_status']] = $ipn;
 
   // Set the transaction's status based on the IPN's trade_status
   $transaction->remote_status = $ipn['trade_status'];
