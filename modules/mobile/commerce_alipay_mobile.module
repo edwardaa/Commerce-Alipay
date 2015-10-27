@@ -1,0 +1,293 @@
+<?php
+
+/**
+ * @file
+ * Implements Alipay Mobile Payment in Drupal Commerce checkout.
+ */
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_alipay_mobile_commerce_payment_method_info() {
+  $payment_methods['alipay_mobile'] = array(
+    'base' => 'commerce_alipay_mobile',
+    'title' => t('Alipay Mobile'),
+    'short_title' => t('Alipay Mobile'),
+    'description' => t('Alipay Mobile Payment'),
+    'terminal' => FALSE,
+    'checkout' => FALSE,
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Returns the default settings for the Alipay Mobile payment method.
+ */
+function commerce_alipay_mobile_default_settings() {
+  return array(
+    'partner' => '',
+    'rsa_private' => '',
+    'rsa_public' => '',
+    'sign_type' => 'RSA',
+    'ipn_logging' => 'notification',
+    'double_quotes' => TRUE,
+    'fixed_fee' => FALSE,
+  );
+}
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_alipay_mobile_settings_form($settings = array()) {
+  $settings = $settings + commerce_alipay_mobile_default_settings();
+
+  $form['partner'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Alipay partner ID'),
+    '#description' => t('The number starting with 2088'),
+    '#default_value' => $settings['partner'],
+    '#required' => TRUE,
+  );
+  // Currently only RSA sign type is supported
+  $form['sign_type'] = array(
+    '#type' => 'radios',
+    '#title' => t('Sign type'),
+    '#options' => array(
+       'RSA' => 'RSA',
+    ),
+    '#description' => t('Currently only RSA sign type is supported.'),
+    '#default_value' => $settings['sign_type'],
+    '#required' => TRUE,
+  );
+  $form['rsa_private'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Merchant RSA private key'),
+    '#description' => t('Merchant RSA private pem file path'),
+    '#default_value' => $settings['rsa_private'],
+    '#element_validate' => array('commerce_alipay_mobile_rsa_key_exist'),
+    '#required' => TRUE,
+    '#states' => array(
+      'visible' => array(
+        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'RSA'),
+      ),
+    ),
+  );
+  $form['rsa_public'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Alipay RSA public key'),
+    '#description' => t('Alipay RSA public pem file path'),
+    '#default_value' => $settings['rsa_public'],
+    '#element_validate' => array('commerce_alipay_mobile_rsa_key_exist'),
+    '#required' => TRUE,
+    '#states' => array(
+      'visible' => array(
+        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'RSA'),
+      ),
+    ),
+  );
+  $form['ipn_logging'] = array(
+    '#type' => 'radios',
+    '#title' => t('IPN logging'),
+    '#options' => array(
+      'notification' => t('Log notifications during IPN validation and processing.'),
+      'full_ipn' => t('Log notifications with the full IPN during validation and processing (used for debugging).'),
+    ),
+    '#default_value' => $settings['ipn_logging'],
+  );
+  $form['double_quotes'] = array(
+    '#type' => 'hidden',
+    '#title' => t('Surround data value with double quotes.'),
+    '#description' => t('For example, partner="2088012345678901"&sign_type="RSA".'),
+    '#default_value' => $settings['double_quotes'],
+  );
+  $form['fixed_fee'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Set total fee to 0.01 CNY.'),
+    '#description' => t('<strong class="warning">Warning:</strong> This option is only for development purpose, and should <b>never</b> be enabled on a production site.'),
+    '#default_value' => $settings['fixed_fee'],
+  );
+
+  return $form;
+}
+
+function commerce_alipay_mobile_rsa_key_exist($element, &$form_state, $form) {
+  if (!file_exists($element['#value'])) {
+    form_error($element, t('RSA key file not found at specified path.'));
+  }
+}
+
+function commerce_alipay_mobile_signed_data($order, $payment_method) {
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['partner'])) {
+    // Alipay Mobile is not configured for use. No Alipay partner has been specified.
+    return FALSE;
+  }
+
+  $settings = array(
+    // Specify the current payment method instance ID in the notify_url
+    'payment_method' => $payment_method['instance_id'],
+  );
+
+  return commerce_alipay_mobile_order_data($order, $payment_method['settings'] + $settings);
+}
+
+/**
+ * Payment method callback: validate an IPN based on out_trade_no, seller_id,
+ * total_fee, and other parameters as possible.
+ */
+function commerce_alipay_mobile_alipay_ipn_validate($order, $payment_method, $ipn) {
+  // Validate seller_id.
+  if ($ipn['seller_id'] != $payment_method['settings']['partner']) {
+    commerce_payment_redirect_pane_previous_page($order);
+    watchdog('commerce_alipay_mobile', 'IPN rejected: invalid seller id specified (@seller_id); must match the partner seller id on the Alipay account.', array('@seller_id' => $ipn['seller_id']), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+
+  // Validate total_fee.
+  // This may be an unnecessary step, but if merchant security keys leaked,
+  // this validation could prevent attacker from completing an order with pretty
+  // low price like 0.01.
+  if (!$payment_method['settings']['fixed_fee']) {
+    // Process given total amount.
+    $total_amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
+    // Process original total amount.
+    $original_total_amount = entity_metadata_wrapper('commerce_order', $order)->commerce_order_total->amount->value();
+
+    if ($total_amount != $original_total_amount) {
+      commerce_payment_redirect_pane_previous_page($order);
+      $params = array( '@total_fee' => $ipn['total_fee'], '@total_amount' => $total_amount, '@amount' => $original_total_amount);
+      watchdog('commerce_alipay_direct', 'IPN rejected: invalid total fee specified (@total_fee -> @total_amount); must match the order total @amount.', $params, WATCHDOG_NOTICE);
+      return FALSE;
+    }
+  }
+
+  // Prepare the IPN data for inclusion in the watchdog message if enabled.
+  $ipn_data = '';
+  if (!empty($payment_method['settings']['ipn_logging']) && $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    $ipn_data = '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>';
+  }
+
+  // Log a message.
+  watchdog('commerce_alipay_mobile', 'IPN validated for Order @order_number with Trade @trade_no.!ipn_data', array('@order_number' => $order->order_number, '@trade_no' => $ipn['trade_no'], '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
+}
+
+/**
+ * Payment method callback: process an IPN once it's been validated.
+ */
+function commerce_alipay_mobile_alipay_ipn_process($order, $payment_method, &$ipn) {
+  $trade_statuses = array(
+    'TRADE_FINISHED',
+    'TRADE_SUCCESS',
+    'WAIT_BUYER_PAY', // unlike Direct Payment, this status will be received
+    // by default, following 2 statuses not received
+    'TRADE_PENDING',
+    'TRADE_CLOSED',
+  );
+  // TODO: other status? TRADE_CLOSED WAIT_BUYER_PAY
+  // Exit when we don't get a payment status we recognize
+  if (!in_array($ipn['trade_status'], $trade_statuses)) {
+    commerce_payment_redirect_pane_previous_page($order);
+    return FALSE;
+  }
+
+  // If this is a prior authorization capture IPN for which we've already
+  // created a transaction...
+  if ( //TODO: in_array($ipn['trade_status'], array('TRADE_FINISHED', 'TRADE_SUCCESS')) &&
+    !empty($ipn['trade_no']) && $prior_ipn = commerce_alipay_ipn_load($ipn['trade_no'])) {
+    // Load the prior IPN's transaction and update that with the capture values.
+    $transaction = commerce_payment_transaction_load($prior_ipn['transaction_id']);
+  }
+  else {
+    // Create a new payment transaction for the order.
+    $transaction = commerce_payment_transaction_new('alipay_mobile', $order->order_id);
+    $transaction->instance_id = $payment_method['instance_id'];
+  }
+
+  $transaction->remote_id = $ipn['trade_no'];
+  $transaction->amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
+  $transaction->currency_code = ALIPAY_CURRENCY;
+  // Append 'trade_status' value to the 'payload' key as two IPNs may has same time
+  $transaction->payload[REQUEST_TIME . '-ipn' . $ipn['trade_status']] = $ipn;
+
+  // Set the transaction's status based on the IPN's trade_status
+  $transaction->remote_status = $ipn['trade_status'];
+
+  // TODO: other status?
+  switch ($ipn['trade_status']) {
+    case 'TRADE_FINISHED':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+      $transaction->message = t('The payment has finished');
+      break;
+
+    case 'TRADE_SUCCESS':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+      $transaction->message = t('The payment was successful');
+      break;
+
+    case 'WAIT_BUYER_PAY':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+      $transaction->message = t('Wait for buyer to continue with payment');
+      break;
+
+    case 'TRADE_PENDING':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+      $transaction->message = t('Merchant account has been frozen, waited to receive money');
+      break;
+
+    // TODO: has another meaning for refund
+    case 'TRADE_CLOSED':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+      $transaction->message = t('The payment was closed/canceled');
+      break;
+  }
+
+  // Save the transaction information.
+  commerce_payment_transaction_save($transaction);
+  $ipn['transaction_id'] = $transaction->transaction_id;
+
+  $ipn['service'] = ALIPAY_SERVICE_DIRECT;
+  $ipn['currency'] = ALIPAY_CURRENCY;
+
+  commerce_payment_redirect_pane_next_page($order, t('Payment submitted via an asynchronous notification.'));
+  watchdog('commerce_alipay_mobile', 'IPN processed for Order @order_number with Trade @trade_no', array('@trade_no' => $ipn['trade_no'], '@order_number' => $order->order_number), WATCHDOG_INFO);
+}
+
+/** Builds a Direct Payment form from an order object.
+ *
+ * @param $order
+ *   The fully loaded order being paid for.
+ *
+ * @return
+ *   The signed data.
+ */
+function commerce_alipay_mobile_order_data($order, $settings) {
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  $amount = $wrapper->commerce_order_total->amount->value();
+  $data = array(
+    'service' => ALIPAY_SERVICE_MOBILE,
+    'partner' => $settings['partner'],
+    'seller_id' => $settings['partner'],
+    'payment_type' => '1',
+    'notify_url' => commerce_alipay_ipn_url($settings['payment_method']),
+    'out_trade_no' => commerce_alipay_out_trade_number($order),
+    'total_fee' => commerce_alipay_price_amount($amount, ALIPAY_CURRENCY),
+    // TODO: remove all reserved keywords like &seller_id, $out_trade_no, etc.
+    'subject' => '#支付subject-seller_id=2088123213', // TODO: subject
+    'body' => '@支付body-out_trade_no=123', // TODO: body
+    '_input_charset' => ALIPAY_CHARSET,
+    'it_b_pay' => '15m', // TODO: timeout for stock. does not work for android client?
+    // 'paymethod'=> 'expressGateway', // TODO:
+  );
+
+  drupal_alter('commerce_alipay_mobile_order_data', $data, $order);
+
+  // In debug mode.
+  if ($settings['fixed_fee']) {
+    $data['total_fee'] = 0.01;
+  }
+
+  // Sign request data.
+  return commerce_alipay_sign($data, $settings);
+}

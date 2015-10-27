@@ -175,15 +175,21 @@ function commerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array(
     }
   }
 
-  // Exit if the IPN has already been processed.
+  // Exit if the IPN has already been processed or is in earlier status.
   if (!empty($ipn['trade_no']) && $prior_ipn = commerce_alipay_ipn_load($ipn['trade_no'])) {
     $prior_status = $prior_ipn['trade_status'];
     $new_status = $ipn['trade_status'];
+    // Validate trade status name to ignore duplicate IPNs.
     if ($prior_status == $new_status) {
       watchdog('commerce_alipay', 'Attempted to process an IPN that has already been processed with Trade @trade_no.', array('@trade_no' => $ipn['trade_no']), WATCHDOG_NOTICE);
       _commerce_alipay_ipn_success();
     }
+    // Validate trade status weight to ensure only the trade statuses with
+    // larger weight could be processed.
     elseif (($statuses = commerce_alipay_trade_statuses()) && $statuses[$prior_status]['weight'] > $statuses[$new_status]['weight']) {
+      // This might happen as the trade statuses are independent, for example,
+      // WAIT_BUYER_PAY may be received after TRADE_SUCCESS, if in that case
+      // WAIT_BUYER_PAY should be ignored.
       $params = array('@trade_no' => $ipn['trade_no'], '@prior_status' => $prior_status, '@new_status' => $new_status);
       watchdog('commerce_alipay', 'Attempted to regress to an earlier trade status @new_status of an IPN with Trade @trade_no from @prior_status.', $params, WATCHDOG_NOTICE);
       _commerce_alipay_ipn_success();
