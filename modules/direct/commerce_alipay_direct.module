@@ -45,7 +45,7 @@ function commerce_alipay_direct_settings_form($settings = array()) {
   $form['partner'] = array(
     '#type' => 'textfield',
     '#title' => t('Alipay partner ID'),
-    '#description' => t('The number starting with 2088'),
+    '#description' => t('The number beginning with 2088'),
     '#default_value' => $settings['partner'],
     '#required' => TRUE,
   );
@@ -55,7 +55,6 @@ function commerce_alipay_direct_settings_form($settings = array()) {
     '#title' => t('Sign type'),
     '#options' => array(
       'MD5' => 'MD5',
-      // 'RSA' => 'RSA',
     ),
     '#description' => t('Currently only MD5 sign type is supported.'),
     '#default_value' => $settings['sign_type'],
@@ -63,26 +62,10 @@ function commerce_alipay_direct_settings_form($settings = array()) {
   );
   $form['md5_key'] = array(
     '#type' => 'textfield',
-    '#title' => t('Alipay Key'),
-    '#description' => t('MD5 sign key'),
+    '#title' => t('Key'),
+    '#description' => t('Verification key for MD5 sign'),
     '#default_value' => $settings['md5_key'],
     '#required' => TRUE,
-    '#states' => array(
-      'visible' => array(
-        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'MD5'),
-      ),
-    ),
-  );
-  $form['rsa_private'] = array(
-    '#type' => 'textfield',
-    '#title' => t('Alipay RSA private pem'),
-    '#description' => t('RSA private pem file path'),
-    '#default_value' => $settings['rsa_private'],
-    '#states' => array(
-      'visible' => array(
-        ':input[name="parameter[payment_method][settings][payment_method][settings][sign_type]"]' => array('value' => 'RSA'),
-      ),
-    ),
   );
   $form['ipn_logging'] = array(
     '#type' => 'radios',
@@ -93,16 +76,16 @@ function commerce_alipay_direct_settings_form($settings = array()) {
     ),
     '#default_value' => $settings['ipn_logging'],
   );
+  $form['show_payment_instructions'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Show a message on the checkout form when Alipay Direct is selected telling the customer to "Continue with checkout to complete payment via Alipay."'),
+    '#default_value' => $settings['show_payment_instructions'],
+  );
   $form['fixed_fee'] = array(
     '#type' => 'checkbox',
     '#title' => t('Set total fee to 0.01 CNY.'),
     '#description' => t('<strong class="warning">Warning:</strong> This option is only for development purpose, and should <b>never</b> be enabled on a production site.'),
     '#default_value' => $settings['fixed_fee'],
-  );
-  $form['show_payment_instructions'] = array(
-    '#type' => 'checkbox',
-    '#title' => t('Show a message on the checkout form when Alipay Direct is selected telling the customer to "Continue with checkout to complete payment via Alipay."'),
-    '#default_value' => $settings['show_payment_instructions'],
   );
 
   return $form;
@@ -155,6 +138,7 @@ function commerce_alipay_direct_redirect_form($form, &$form_state, $order, $paym
 
   return commerce_alipay_direct_order_form($form, $form_state, $order, $payment_method['settings'] + $settings);
 }
+
 /**
  * Payment method callback: redirect form return validation.
  *
@@ -200,30 +184,54 @@ function commerce_alipay_direct_redirect_form_validate($order, $payment_method) 
   }
 }
 
-
 /**
  * Payment method callback: validate an IPN based on out_trade_no, seller_id,
  * total_fee, and other parameters as possible.
  */
 function commerce_alipay_direct_alipay_ipn_validate($order, $payment_method, $ipn) {
-  // TODO:
+  if ($ipn['seller_id'] != $payment_method['settings']['partner']) {
+    commerce_payment_redirect_pane_previous_page($order);
+    watchdog('commerce_alipay_direct', 'IPN rejected: invalid seller id specified (@seller_id); must match the partner seller id on the Alipay account.', array('@seller_id' => $ipn['seller_id']), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+
+  // Validate total_fee.
+  // This may be an unnecessary step, but if merchant security keys leaked,
+  // this validation could prevent attacker from completing an order with pretty
+  // low price like 0.01.
+  if (!$payment_method['settings']['fixed_fee']) {
+    // Process given total amount.
+    $total_amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
+    // Process original total amount.
+    $original_total_amount = entity_metadata_wrapper('commerce_order', $order)->commerce_order_total->amount->value();
+
+    if ($total_amount != $original_total_amount) {
+      commerce_payment_redirect_pane_previous_page($order);
+      $params = array( '@total_fee' => $ipn['total_fee'], '@total_amount' => $total_amount, '@amount' => $original_total_amount);
+      watchdog('commerce_alipay_direct', 'IPN rejected: invalid total fee specified (@total_fee -> @total_amount); must match the order total @amount.', $params, WATCHDOG_NOTICE);
+      return FALSE;
+    }
+  }
+
+  // Prepare the IPN data for inclusion in the watchdog message if enabled.
+  $ipn_data = '';
+
+  if (!empty($payment_method['settings']['ipn_logging']) && $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    $ipn_data = '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>';
+  }
+
+  // Log a message.
+  watchdog('commerce_alipay_direct', 'IPN validated for Order @order_number with Trade @trade_no.!ipn_data', array('@order_number' => $order->order_number, '@trade_no' => $ipn['trade_no'], '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
 }
 
 /**
  * Payment method callback: process an IPN once it's been validated.
  */
 function commerce_alipay_direct_alipay_ipn_process($order, $payment_method, &$ipn) {
-  // TODO: necessary?
-  // Do not perform any processing on Direct transactions here that do not have
-  // transaction IDs, indicating they are non-payment IPNs.
-  if (empty($ipn['trade_no'])) {
-    return FALSE;
-  }
-
   $trade_statuses = array(
     'TRADE_FINISHED',
     'TRADE_SUCCESS',
-    // by default, IPN won't sent in following 3 statuses
+    // by default, following 3 statuses not received.
     'WAIT_BUYER_PAY',
     'TRADE_PENDING',
     'TRADE_CLOSED',
@@ -251,7 +259,8 @@ function commerce_alipay_direct_alipay_ipn_process($order, $payment_method, &$ip
   $transaction->remote_id = $ipn['trade_no'];
   $transaction->amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
   $transaction->currency_code = ALIPAY_CURRENCY;
-  $transaction->payload[REQUEST_TIME . '-ipn'] = $ipn;
+  // Append 'trade_status' value to the 'payload' key as two IPNs may has same time
+  $transaction->payload[REQUEST_TIME . '-ipn-' . $ipn['trade_status']] = $ipn;
 
   // Set the transaction's status based on the IPN's trade_status
   $transaction->remote_status = $ipn['trade_status'];
@@ -292,8 +301,8 @@ function commerce_alipay_direct_alipay_ipn_process($order, $payment_method, &$ip
   $ipn['service'] = ALIPAY_SERVICE_DIRECT;
   $ipn['currency'] = ALIPAY_CURRENCY;
 
-  commerce_payment_redirect_pane_next_page($order, t('Payment submitted via asynchronous notification.'));
-  watchdog('commerce_alipay_direct', 'IPN processed for Order @order_number with trade No.@trade_no', array('@trade_no' => $ipn['trade_no'], '@order_number' => $order->order_number), WATCHDOG_INFO);
+  commerce_payment_redirect_pane_next_page($order, t('Payment submitted via an asynchronous notification.'));
+  watchdog('commerce_alipay_direct', 'IPN processed for Order @order_number with Trade @trade_no', array('@trade_no' => $ipn['trade_no'], '@order_number' => $order->order_number), WATCHDOG_INFO);
 }
 
 /** Builds a Direct Payment form from an order object.
@@ -311,19 +320,16 @@ function commerce_alipay_direct_order_form($form, &$form_state, $order, $setting
   $data = array(
     'service' => ALIPAY_SERVICE_DIRECT,
     'partner' => $settings['partner'],
-    // 'seller_email' => $settings['seller_email'],
     'seller_id' => $settings['partner'],
     'payment_type' => '1',
-    'notify_url' => commerce_alipay_ipn_url($settings['payment_method']), // TODO: https ?
+    'notify_url' => commerce_alipay_ipn_url($settings['payment_method']),
     'return_url' => $settings['return'],
     'out_trade_no' => commerce_alipay_out_trade_number($order),
     'total_fee' => commerce_alipay_price_amount($amount, ALIPAY_CURRENCY),
     'subject' => '支付subject#', // TODO: subject
     'body' => '支付body@', // TODO: body
-     'show_url' => 'http://localhost/product/10001', // TODO: show url
-    // 'anti_phishing_key' => $anti_phisZhing_key, // TODO: needed?
-    'exter_invoke_ip' => ip_address(),
-    '_input_charset' => 'utf-8',
+    'show_url' => 'http://localhost/product/10001', // TODO: show url
+    '_input_charset' => ALIPAY_CHARSET,
     'it_b_pay' => '15m', // TODO: timeout for stock
   );
 
@@ -337,7 +343,7 @@ function commerce_alipay_direct_order_form($form, &$form_state, $order, $setting
   // Sign request data.
   $signed_data = commerce_alipay_sign($data, $settings);
 
-  $form['#action'] = ALIPAY_SERVER . '?_input_charset=utf-8';
+  $form['#action'] = ALIPAY_SERVER;
   $form['#method'] = 'post';
 
   foreach ($signed_data as $name => $value) {
@@ -356,7 +362,7 @@ function commerce_alipay_direct_order_form($form, &$form_state, $order, $setting
  * Implements hook_form_FORM_ID_alter().
  */
 function commerce_alipay_direct_form_commerce_checkout_form_payment_alter(&$form, &$form_state) {
-  // If this form is for Alipay
+  // If this payment form is for Alipay
   if (strpos($form['#action'], ALIPAY_SERVER) === 0) {
     // Remove name attribute from the submit button for Alipay,
     // see _form_builder_handle_input_element() and form_builder() in form.inc.

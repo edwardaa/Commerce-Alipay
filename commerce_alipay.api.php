@@ -5,6 +5,39 @@
  * Documents hooks provided by the Alipay modules.
  */
 
+/**
+ * Defines trade statuses for use in grouping trade statuses together.
+ *
+ * An tarde status is a single step in the life-cycle of an trade that
+ * administrators can use to know at a glance what has occurred to the trade
+ * already and/or what the next step in processing the trade will be.
+ *
+ * @return
+ *   An array of trade statuses arrays keyed by name.
+ */
+function hook_commerce_alipay_trade_status_info() {
+  $trade_statuses = array();
+
+  $trade_statuses['TRADE_SUCCESS'] = array(
+    'name' => 'TRADE_SUCCESS',
+    'title' => t('Successful'),
+    'weight' => 10,
+  );
+
+  return $trade_statuses;
+}
+
+/**
+ * Allows modules to alter the trade status definitions of other modules.
+ *
+ * @param $trade_statuses
+ *   An array of trade statuses defined by enabled modules.
+ *
+ * @see hook_commerce_alipay_trade_status_info()
+ */
+function hook_commerce_alipay_trade_status_alter(&$trade_statuses) {
+  $trade_statuses['TRADE_CLOSED']['weight'] = 10;
+}
 
 /**
  * Lets modules perform additional processing on validated IPNs.

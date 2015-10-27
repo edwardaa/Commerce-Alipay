@@ -8,12 +8,17 @@
 /**
  * Alipay API server.
  */
-define('ALIPAY_SERVER', 'https://mapi.alipay.com/gateway.do');
+define('ALIPAY_SERVER', 'https://mapi.alipay.com/gateway.do?_input_charset=utf-8');
 
 /**
  * Only CNY is acceptable for Alipay.
  */
 define('ALIPAY_CURRENCY', 'CNY');
+
+/**
+ * UTF-8 encoding charset.
+ */
+define('ALIPAY_CHARSET', 'utf-8');
 
 /**
  * Direct payment service.
@@ -36,16 +41,6 @@ define('ALIPAY_SERVICE_ESCROW', 'create_partner_trade_by_buyer');
 define('ALIPAY_SERVICE_MOBILE', 'mobile.securitypay.pay');
 
 /**
- * Successful ipn processing
- */
-define('ALIPAY_IPN_PROCESSING_SUCCESS', 'success');
-
-/**
- * Failed ipn processing
- */
-define('ALIPAY_IPN_PROCESSING_FAILURE', 'failure');
-
-/**
  * Implements hook_menu().
  */
 function commerce_alipay_menu() {
@@ -53,11 +48,11 @@ function commerce_alipay_menu() {
 //  $items['commerce_alipay/ipn'] = array(
 //    'page callback' => 'commerce_alipay_process_ipn',
 //    'page arguments' => array(),
-//    'access callbac' => TRUE,
+//    'access callback' => TRUE,
 //    'type' => MENU_CALLBACK,
 //  );
 
-  $items['commerce_alipay/ipn/%commerce_payment_method_instance'] = array(
+  $items['commerce_alipay/ipn/%commerce_alipay_method_instance'] = array(
     'page callback' => 'commerce_alipay_process_ipn',
     'page arguments' => array(2),
     'access callback' => TRUE,
@@ -65,6 +60,18 @@ function commerce_alipay_menu() {
   );
 
   return $items;
+}
+
+/**
+ * Returns a payment method instance array.
+ *
+ * @see commerce_payment_default_rules_configuration()
+ * @see commerce_alipay_ipn_url()
+ */
+function commerce_alipay_method_instance_load($method_id) {
+  $rule_name = 'commerce_payment_' . $method_id;
+  $instance_id = "$method_id|$rule_name";
+  return commerce_payment_method_instance_load($instance_id);
 }
 
 /**
@@ -77,9 +84,49 @@ function commerce_alipay_menu() {
  *   IPN url
  */
 function commerce_alipay_ipn_url($instance_id) {
-  // Note: in notify_url $instance_id is in "method_id|rule_name" format
-  // which is invalid for Alipay, but it will be encode in url() function.
-  return url("commerce_alipay/ipn/$instance_id", array('absolute' => TRUE));
+  // Explode the method key into its component parts.
+  list($method_id, $rule_name) = explode('|', $instance_id);
+
+  // instance_id in "method_id|rule_name" pattern is invalid for certain
+  // Alipay payment methods such as Alipay Mobile, To be consistent,
+  // method_id is used instead.
+  return url('commerce_alipay/ipn/' . $method_id, array('absolute' => TRUE));
+}
+
+/**
+ * Implements hook_commerce_alipay_trade_status_info().
+ */
+function commerce_alipay_commerce_alipay_trade_status_info() {
+  $trade_statuses['WAIT_BUYER_PAY'] = array(
+    'name' => 'WAIT_BUYER_PAY',
+    'title' => t('Wait buyer pay'),
+    'weight' => -10,
+  );
+
+  $trade_statuses['TRADE_PENDING'] = array(
+    'name' => 'TRADE_PENDING',
+    'title' => t('Trade pending'),
+    'weight' => 10,
+  );
+
+  $trade_statuses['TRADE_SUCCESS'] = array(
+    'name' => 'TRADE_SUCCESS',
+    'title' => t('Trade success'),
+    'weight' => 11,
+  );
+
+  $trade_statuses['TRADE_FINISHED'] = array(
+    'name' => 'TRADE_FINISHED',
+    'title' => t('Trade finished'),
+    'weight' => 12,
+  );
+  $trade_statuses['TRADE_CLOSED'] = array(
+    'name' => 'TRADE_CLOSED',
+    'title' => t('Trade closed'),
+    'weight' => 20,
+  );
+
+  return $trade_statuses;
 }
 
 /**
@@ -130,8 +177,15 @@ function commerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array(
 
   // Exit if the IPN has already been processed.
   if (!empty($ipn['trade_no']) && $prior_ipn = commerce_alipay_ipn_load($ipn['trade_no'])) {
-    if ($prior_ipn['trade_status'] == $ipn['trade_status']) {
-      watchdog('commerce_alipay', 'Attempted to process an IPN that has already been processed with trade NO. @trade_no.', array('@trade_no' => $ipn['trade_no']), WATCHDOG_NOTICE);
+    $prior_status = $prior_ipn['trade_status'];
+    $new_status = $ipn['trade_status'];
+    if ($prior_status == $new_status) {
+      watchdog('commerce_alipay', 'Attempted to process an IPN that has already been processed with Trade @trade_no.', array('@trade_no' => $ipn['trade_no']), WATCHDOG_NOTICE);
+      _commerce_alipay_ipn_success();
+    }
+    elseif (($statuses = commerce_alipay_trade_statuses()) && $statuses[$prior_status]['weight'] > $statuses[$new_status]['weight']) {
+      $params = array('@trade_no' => $ipn['trade_no'], '@prior_status' => $prior_status, '@new_status' => $new_status);
+      watchdog('commerce_alipay', 'Attempted to regress to an earlier trade status @new_status of an IPN with Trade @trade_no from @prior_status.', $params, WATCHDOG_NOTICE);
       _commerce_alipay_ipn_success();
     }
   }
@@ -184,19 +238,19 @@ function commerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array(
 
   // Invoke the hook here so implementations has access to the order and
   // payment method if available and a saved IPN array that includes the payment
-  // trade number if created in the payment method's default process callback.
+  // transaction ID if created in the payment method's default process callback.
   module_invoke_all('commerce_alipay_ipn_process', $order, $payment_method, $ipn);
 
   _commerce_alipay_ipn_success();
 }
 
 function _commerce_alipay_ipn_failure() {
-  print ALIPAY_IPN_PROCESSING_FAILURE;
+  print 'failure';
   drupal_exit();
 }
 
 function _commerce_alipay_ipn_success() {
-  print ALIPAY_IPN_PROCESSING_SUCCESS;
+  print 'success';
   drupal_exit();
 }
 
@@ -216,6 +270,10 @@ function commerce_alipay_ipn_load($id, $type = 'trade_no') {
   return db_select('commerce_alipay_ipn', 'cai')
     ->fields('cai')
     ->condition('cai.' . $type, $id)
+    // Retrieve a last IPN record with cai.ipn_id rather than cai.created,
+    // since two IPNs such as WAIT_BUYER_PAY and TRADE_SUCCESS may be received
+    // at same time in seconds
+    ->orderBy('cai.ipn_id', 'DESC')
     ->execute()
     ->fetchAssoc();
 }
@@ -293,9 +351,9 @@ function commerce_alipay_api_request($payment_method, $nvp = array(), $order = N
   // Add the default name-value pairs to the array.
   $nvp += array(
     // API credentials
-    'PARTNER' => $payment_method['settings']['partner'],
+    'parnter' => $payment_method['settings']['partner'],
     'rsa_private' => $payment_method['settings']['rsa_private'],
-    'alipay_rsa_public' => $payment_method['settings']['alipay_rsa_public'],
+    'rsa_public' => $payment_method['settings']['rsa_public'],
   );
 
   // Allow modules to alter parameters of the API request.
@@ -362,6 +420,29 @@ function commerce_alipay_api_request($payment_method, $nvp = array(), $order = N
 }
 
 /**
+ * Returns an array of all the trade statuses keyed by name.
+ *
+ * @return
+ *   The array of trade statuses, keyed by status name.
+ */
+function commerce_alipay_trade_statuses() {
+  // First check the static cache for an trade statues array
+  $trade_statuses = &drupal_static(__FUNCTION__);
+
+  // If it did not exist, fetch the statuses now.
+  if (!isset($trade_statuses)) {
+    $trade_statuses = module_invoke_all('commerce_alipay_trade_status_info');
+
+    // Give other modules a change to alter the trade statuses.
+    drupal_alter('commerce_alipay_trade_status_info', $trade_statuses);
+
+    uasort($trade_statuses, 'drupal_sort_weight');
+  }
+
+  return $trade_statuses;
+}
+
+/**
  * Formats a price amount into a decimals value as expected by Alipay.
  *
  * @param $amount
@@ -377,17 +458,62 @@ function commerce_alipay_price_amount($amount, $currency_code) {
 }
 
 /**
- * Verifies IPN based on sign, notify_id and other parameters to prevent
- * invalid API call or attack.
+ * Signs given data array using specified settings.
+ *
+ * @param $data
+ *   The data array to be signed.
+ * @param $settings
+ *   The Alipay settings containing sign_type and partner_key.
+ * @param $double_quotes
+ *   TRUE or FALSE indicating whether or not to surround data value with double
+ *   quotes. If missing or NULL, the value configured in 'Payment settings'
+ *   is used.
+ *
+ * @return array
+ *   The signed data including sign and sign_type.
+ */
+function commerce_alipay_sign(array $data, $settings, $double_quotes = NULL) {
+  if (!isset($double_quotes) && isset($settings['double_quotes'])) {
+    $double_quotes = $settings['double_quotes'];
+  }
+
+  $data_str = _commerce_alipay_process_data($data, $double_quotes);
+
+  $sign_type = $settings['sign_type'];
+  $sign = '';
+
+  if ($sign_type == 'MD5') {
+    $sign = md5($data_str . $settings['md5_key']);
+  }
+  else if ($sign_type == 'RSA') {
+    $priv_key_id = openssl_get_privatekey('file://' . $settings['rsa_private']);
+    openssl_sign($data_str, $sign_result, $priv_key_id);
+    openssl_free_key($priv_key_id);
+    $sign = drupal_base64_encode($sign_result);
+  }
+
+  if ($double_quotes) {
+    // Surround with double quotes.
+    $data['sign'] = '"' . $sign . '"';
+    $data['sign_type'] = '"' . $sign_type . '"';
+  }
+  else {
+    $data['sign'] = $sign;
+    $data['sign_type'] = $sign_type;
+  }
+
+  return $data;
+}
+
+/**
+ * Verifies IPN based on sign, notify_id and other parameters.
  *
  * @return boolean
  *   TRUE of FALSE indicating whether the IPN was sent by Alipay server or not.
  */
 function commerce_alipay_verify_ipn($ipn, $settings) {
-  // TODO: RSA check sign?
   // Verify signature
-  $signed_data = commerce_alipay_sign($ipn, $settings);
-  if ($signed_data['sign'] != $ipn['sign']) {
+  if (commerce_alipay_verify_sign($ipn, $settings) === FALSE) {
     watchdog('commerce_alipay', 'IPN verification failed failed with non-matching sign.', array(), WATCHDOG_WARNING);
     return FALSE;
   }
@@ -397,13 +523,67 @@ function commerce_alipay_verify_ipn($ipn, $settings) {
     return FALSE;
   }
 
-  // Verify notification to ensure it is returned from Alipay rather than elsewhere.
-  $url = ALIPAY_SERVER
-    . '?service=notify_verify'
-    . '&partner=' . $settings['partner']
-    . '&notify_id=' . $ipn['notify_id'];
+  // Verify notify_id
+  return commerce_alipay_verify_notify($ipn['notify_id'], $settings);
+}
 
+/**
+ * Verifies signature returned from Alipay.
+ *
+ * @param $data
+ *   Returned data from Alipay
+ * @param $settings
+ *   Payment settings
+ *
+ * @return bool
+ *   TRUE or FALSE indicating whether or not the returned signature is
+ *   matching with our signature.
+ */
+function commerce_alipay_verify_sign(array $data, $settings) {
+  if ($settings['sign_type'] == 'MD5') {
+    $prior_sign = $data['sign'];
+    // For verification the $double_quotes is always FALSE
+    $signed_data = commerce_alipay_sign($data, $settings, FALSE);
+
+    return $signed_data['sign'] == $prior_sign;
+  }
+
+  if ($settings['sign_type'] == 'RSA') {
+    $prior_sign = $data['sign'];
+    // For verification the $double_quotes is always FALSE
+    $data_str = _commerce_alipay_process_data($data, FALSE);
+
+    $pub_key_id = openssl_get_publickey('file://' . $settings['rsa_public']);
+    $result = openssl_verify($data_str, base64_decode($prior_sign), $pub_key_id);
+    openssl_free_key($pub_key_id);
+
+    // 1  - successful
+    // 0  - failed
+    // -1 - error
+    return $result === 1;
+  }
+
+  // unrecognized sign type
+  return FALSE;
+}
+
+/**
+ * Verify notify_id to ensure it is returned from Alipay rather than elsewhere.
+ *
+ * @param $notify_id
+ *   Notification id
+ * @param $settings
+ *   Payment settings
+ * @return bool
+ *   TRUE or FALSE
+ */
+function commerce_alipay_verify_notify($notify_id, $settings) {
+  $url = ALIPAY_SERVER . "&service=notify_verify&partner={$settings['partner']}&notify_id={$notify_id}";
   $response = drupal_http_request($url);
+
+  if (!empty($settings['ipn_logging']) && $settings['ipn_logging'] == 'full_ipn') {
+    watchdog('commerce_alipay', 'Verify notify_id with the following response :!response', array('!response' => '<pre>' . check_plain(print_r($response, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
+  }
 
   // If an error occurred during processing, log the message and exit.
   if (property_exists($response, 'error')) {
@@ -411,78 +591,33 @@ function commerce_alipay_verify_ipn($ipn, $settings) {
     return FALSE;
   }
 
-  return !empty($response->data) && $response->data == 'true';
+  return $response->data === 'true';
 }
 
 /**
- * Signs given data array using specified settings.
- *
- * @param $data
- *   The data array to be signed.
- * @param $settings
- *   The Alipay settings containing sign_type and partner_key.
- *
- * @return array
- *   The signed data including sign and sign_type.
+ * Processes a data array and returns its string for request.
  */
-function commerce_alipay_sign(array $data, $settings) {
-  // Filter items.
+function _commerce_alipay_process_data(&$data, $double_quotes) {
+  // Strip sign/sign_type
+  unset($data['sign'], $data['sign_type']);
+  // Strip empty items
   foreach ($data as $key => $value) {
-    if ($key == 'sign' || $key == 'sign_type' || empty($value)) {
+    if ($value == '') {
       unset($data[$key]);
     }
   }
 
+  // Sort by keys
+  ksort($data);
+
   $params = array();
-  if ($settings['sign_type'] == 'MD5') {
-    // Sort by keys
-    ksort($data);
-    foreach ($data as $key => $value) {
-      $params[] = $key . '=' . $value;
-    }
-  }
-  else {
-    foreach ($data as $key => &$value) {
+  foreach ($data as $key => &$value) {
+    if ($double_quotes) {
       // Surround with double quotes.
       $value = '"' . $value . '"';
-      $params[] = $key . '=' . $value;
     }
+    $params[] = $key . '=' . $value;
   }
 
-  $data_str = implode('&', $params);
-
-  switch ($settings['sign_type']) {
-    case 'MD5':
-      $sign = _commerce_alipay_sign_md5($data_str, $settings['md5_key']);
-      break;
-    case 'RSA':
-      $sign = _commerce_alipay_sign_rsa($data_str, $settings['rsa_private']);
-      break;
-    default:
-      $sign = '';
-      break;
-  }
-
-  if ($settings['sign_type'] == 'MD5') {
-    $data['sign'] = $sign;
-    $data['sign_type'] = $settings['sign_type'];
-  }
-  else {
-    // Surround with double quotes.
-    $data['sign'] = '"' . $sign . '"';
-    $data['sign_type'] = '"' . $settings['sign_type'] . '"';
-  }
-
-  return $data;
-}
-
-function _commerce_alipay_sign_md5($data_str, $md5_key) {
-  return md5($data_str . $md5_key);
-}
-
-function _commerce_alipay_sign_rsa($data_str, $rsa_private_file) {
-  $pkey_id = openssl_get_privatekey('file://'. $rsa_private_file);
-  openssl_sign($data_str, $sign, $pkey_id);
-  openssl_free_key($pkey_id);
-  return drupal_base64_encode($sign);
+  return implode('&', $params);
 }
