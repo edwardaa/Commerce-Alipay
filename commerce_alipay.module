@@ -280,6 +280,7 @@ function commerce_alipay_ipn_load($id, $type = 'trade_no') {
     // since two IPNs such as WAIT_BUYER_PAY and TRADE_SUCCESS may be received
     // at same time in seconds
     ->orderBy('cai.ipn_id', 'DESC')
+    ->range(0, 1)
     ->execute()
     ->fetchAssoc();
 }
