@@ -46,14 +46,6 @@ define('ALIPAY_SERVICE_MOBILE', 'mobile.securitypay.pay');
  * Implements hook_menu().
  */
 function commerce_alipay_menu() {
-//  // Define an always accessible path to receive IPNs
-//  $items['commerce_alipay/ipn'] = array(
-//    'page callback' => 'commerce_alipay_process_ipn',
-//    'page arguments' => array(),
-//    'access callback' => TRUE,
-//    'type' => MENU_CALLBACK,
-//  );
-
   $items['commerce_alipay/ipn/%commerce_alipay_method_instance'] = array(
     'page callback' => 'commerce_alipay_process_ipn',
     'page arguments' => array(2),
@@ -202,6 +194,9 @@ function commerce_alipay_process_ipn($payment_method = NULL, $debug_ipn = array(
   if (!empty($ipn['out_trade_no']) && strpos($ipn['out_trade_no'], '-') !== FALSE) {
     list($ipn['order_id'], $timestamp) = explode('-', $ipn['out_trade_no']);
   }
+  elseif (!empty($ipn['out_trade_no'])) {
+    $ipn['order_id'] = $ipn['out_trade_no'];
+  }
   else {
     $ipn['order_id'] = 0;
     $timestamp = 0;
@@ -254,11 +249,7 @@ function commerce_alipay_alipay_ipn_validate($order, $payment_method, $ipn) {
   // security keys leaked, this step could prevent attacker from completing
   // an order with pretty low price such as 0.01.
   if (!$payment_method['settings']['fixed_fee']) {
-    // Get original total amount.
-    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
-    $amount = $order_wrapper->commerce_order_total->amount->value();
-    // Process given total amount.
-    $original_total_fee = commerce_alipay_amount_to_decimal($amount, ALIPAY_CURRENCY);
+    $original_total_fee = commerce_alipay_order_total_fee($order);
 
     // Compare the resulting decimal value instead of the amount value, since we
     // passed the decimal value which may be precious lost to Alipay during payemnt.
@@ -284,6 +275,14 @@ function commerce_alipay_alipay_ipn_validate($order, $payment_method, $ipn) {
  * Payment method callback: process an IPN once it's been validated.
  */
 function commerce_alipay_alipay_ipn_process($order, $payment_method, &$ipn) {
+  $order_group = !empty($order->order_group);
+  $orders = $order_group ? commerce_marketplace_order_group_load($order->order_group) : array($order);
+
+  // @TODO: What is the safest way to check if order has already been paid for?
+  // @see commerce_marketplace_payment_pane_checkout_form
+  // $order_status = commerce_order_status_load($order->status);
+  // if ($order_status['cart']) {
+
   $trade_statuses = array(
     'TRADE_FINISHED',
     'TRADE_SUCCESS',
@@ -294,70 +293,103 @@ function commerce_alipay_alipay_ipn_process($order, $payment_method, &$ipn) {
   // TODO: other status? TRADE_CLOSED WAIT_BUYER_PAY
   // Exit when we don't get a payment status we recognize
   if (!in_array($ipn['trade_status'], $trade_statuses)) {
-    commerce_payment_redirect_pane_previous_page($order);
+    foreach ($orders as $group_order) {
+      commerce_payment_redirect_pane_previous_page($group_order);
+    }
     return FALSE;
   }
 
-  // If this is a prior authorization capture IPN for which we've already
-  // created a transaction...
-  if ( //TODO: in_array($ipn['trade_status'], array('TRADE_FINISHED', 'TRADE_SUCCESS')) &&
-    !empty($ipn['trade_no']) && $prior_ipn = commerce_alipay_ipn_load($ipn['trade_no'])) {
-    // Load the prior IPN's transaction and update that with the capture values.
-    $transaction = commerce_payment_transaction_load($prior_ipn['transaction_id']);
-  }
-  else {
-    // Create a new payment transaction for the order.
-    $transaction = commerce_payment_transaction_new($payment_method['method_id'], $order->order_id);
-    $transaction->instance_id = $payment_method['instance_id'];
-  }
-
-  $transaction->remote_id = $ipn['trade_no'];
-  $transaction->amount = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
-  $transaction->currency_code = ALIPAY_CURRENCY;
-  // Append 'trade_status' value to the 'payload' key as two IPNs may has same time
-  $transaction->payload[REQUEST_TIME . '-ipn-' . $ipn['trade_status']] = $ipn;
-
-  // Set the transaction's status based on the IPN's trade_status
-  $transaction->remote_status = $ipn['trade_status'];
-
-  // TODO: other status?
-  switch ($ipn['trade_status']) {
-    case 'TRADE_FINISHED':
-      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
-      $transaction->message = t('The payment has finished');
-      break;
-
-    case 'TRADE_SUCCESS':
-      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
-      $transaction->message = t('The payment was successful');
-      break;
-
-    case 'WAIT_BUYER_PAY':
-      $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
-      $transaction->message = t('Wait for buyer to continue with payment');
-      break;
-
-    case 'TRADE_PENDING':
-      $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
-      $transaction->message = t('Merchant account has been frozen, waited to receive money');
-      break;
-
-    // TODO: has another meaning for refund
-    case 'TRADE_CLOSED':
-      $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
-      $transaction->message = t('The payment was closed/canceled');
-      break;
+  // If this is a status changed IPN for which we've already created a transaction...
+  if (// TODO: in_array($ipn['trade_status'], array('TRADE_FINISHED', 'TRADE_SUCCESS')) &&
+    !empty($ipn['trade_no']) && $prior_ipn = commerce_alipay_ipn_load($ipn['trade_no'])
+  ) {
+    // Load the prior IPN's transactions.
+    $transactions = array();
+    foreach ($prior_ipn['data']['transactions'] as $order_id => $transaction_id) {
+      $transactions[$order_id] = commerce_payment_transaction_load($transaction_id);
+    }
+//      db_select('commerce_payment_transaction', 'cpt')
+//        ->fields('cpt')
+//        ->condition('cpt.transaction_id', $prior_ipn['data']['transactions'], 'IN')
+//        ->execute()
+//        ->fetchAllAssoc('cpt.order_id');
   }
 
-  // Save the transaction information.
-  commerce_payment_transaction_save($transaction);
-  $ipn['transaction_id'] = $transaction->transaction_id;
+  $remainder = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
+  foreach ($orders as $group_order) {
+    if (!empty($transactions[$group_order->order_id])) {
+      $transaction = $transactions[$group_order->order_id];
+    }
+    else {
+      // Create a new payment transaction for the order.
+      $transaction = commerce_payment_transaction_new($payment_method['method_id'], $group_order->order_id);
+      $transaction->instance_id = $payment_method['instance_id'];
+    }
+
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $group_order);
+    $amount = $order_wrapper->commerce_order_total->amount->value();
+
+    // Deduct from total fee to an order.
+    if ($remainder >= $amount) {
+      $remainder -= $amount;
+    }
+    else {
+      $amount = $remainder;
+      $remainder = 0;
+    }
+
+    $transaction->remote_id = $ipn['trade_no'];
+    $transaction->amount = $amount;
+    $transaction->currency_code = ALIPAY_CURRENCY;
+    // Append 'trade_status' value to the 'payload' key as two IPNs may has same time
+    $transaction->payload[REQUEST_TIME . '-ipn-' . $ipn['trade_status']] = $ipn;
+
+    // Set the transaction's status based on the IPN's trade_status
+    $transaction->remote_status = $ipn['trade_status'];
+
+    // TODO: other status?
+    switch ($ipn['trade_status']) {
+      case 'TRADE_FINISHED':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        $transaction->message = t('The payment has finished');
+        break;
+
+      case 'TRADE_SUCCESS':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        $transaction->message = t('The payment was successful');
+        break;
+
+      case 'WAIT_BUYER_PAY':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+        $transaction->message = t('Wait for buyer to continue with payment');
+        break;
+
+      case 'TRADE_PENDING':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+        $transaction->message = t('Merchant account has been frozen, waited to receive money');
+        break;
+
+      // TODO: has another meaning for refund
+      case 'TRADE_CLOSED':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+        $transaction->message = t('The payment was closed/canceled');
+        break;
+    }
+
+    // Save the transaction information.
+    commerce_payment_transaction_save($transaction);
+    $ipn['data']['transactions'][$group_order->order_id] = $transaction->transaction_id;
+
+    commerce_payment_redirect_pane_next_page($group_order, t('Order status updated via an IPN.'));
+    watchdog('commerce_alipay', 'IPN processed for Order @order_number with Trade @trade_no', array('@trade_no' => $ipn['trade_no'], '@order_number' => $group_order->order_number), WATCHDOG_INFO);
+  }
+
+  if ($remainder > 0) { // Normally this should not happen.
+    watchdog('commerce_alipay', 'Total fee remainder @remainder after all orders processed with Trade @trade_no', array('@trade_no' => $ipn['trade_no'], '@remainder' => $remainder), WATCHDOG_WARNING);
+  }
 
   $ipn['service'] = ALIPAY_SERVICE_DIRECT;
   $ipn['currency'] = ALIPAY_CURRENCY;
-
-  commerce_payment_redirect_pane_next_page($order, t('Order status updated via an IPN.'));
-  watchdog('commerce_alipay', 'IPN processed for Order @order_number with Trade @trade_no', array('@trade_no' => $ipn['trade_no'], '@order_number' => $order->order_number), WATCHDOG_INFO);
 }
 
 function _commerce_alipay_exist_ipn_failure() {
@@ -560,15 +592,26 @@ function commerce_alipay_trade_statuses() {
 /**
  * Formats a price amount into a decimals value as expected by Alipay.
  *
- * @param $amount
- *   The integer price amount.
+ * @param $order
+ *   The order.
  * @param $currency_code
  *   The currency code of the price.
  *
  * @return float
  *   The decimal price amount as excepted by Alipay API servers.
  */
-function commerce_alipay_amount_to_decimal($amount, $currency_code) {
+function commerce_alipay_order_total_fee($order, $currency_code = NULL) {
+  if (!isset($currency_code)) {
+    $currency_code = ALIPAY_CURRENCY;
+  }
+
+  $amount = 0;
+  $orders = !empty($order->order_group) ? commerce_marketplace_order_group_load($order->order_group) : array($order);
+  foreach ($orders as $group_order) {
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $group_order);
+    $amount += $order_wrapper->commerce_order_total->amount->value();
+  }
+  // Process given total amount.
   return number_format(commerce_currency_amount_to_decimal($amount, $currency_code), 2, '.', '');
 }
 

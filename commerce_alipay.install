@@ -56,13 +56,13 @@ function commerce_alipay_schema() {
         'not null' => TRUE,
         'default' => 0,
       ),
-      'transaction_id' => array(
-        'description' => 'The payment transaction ID the payment belongs to.',
-        'type' => 'int',
-        'unsigned' => TRUE,
-        'not null' => TRUE,
-        'default' => 0,
-      ),
+//      'transaction_id' => array(
+//        'description' => 'The payment transaction ID the payment belongs to.',
+//        'type' => 'int',
+//        'unsigned' => TRUE,
+//        'not null' => TRUE,
+//        'default' => 0,
+//      ),
       'total_fee' => array(
         'description' => 'The total payment amount.',
         'type' => 'numeric',
@@ -114,13 +114,13 @@ function commerce_alipay_schema() {
         'not null' => TRUE,
         'default' => 0,
       ),
-//      'test_ipn' => array(
-//        'description' => 'Boolean indicating whether or not this was a test IPN sent by the Sandbox.',
-//        'type' => 'int',
-//        'size' => 'tiny',
-//        'not null' => TRUE,
-//        'default' => 0,
-//      ),
+      'data' => array(
+        'type' => 'blob',
+        'not null' => FALSE,
+        'size' => 'big',
+        'serialize' => TRUE,
+        'description' => 'A serialized array of additional data.',
+      ),
     ),
     'primary key' => array('ipn_id'),
     'foreign keys' => array(
@@ -128,10 +128,10 @@ function commerce_alipay_schema() {
         'table' => 'commerce_order',
         'columns'=> array('order_id' => 'order_id'),
       ),
-      'transaction_id' => array(
-        'table' => 'commerce_payment_transaction',
-        'columns'=> array('payment_id' => 'payment_id'),
-      ),
+//      'transaction_id' => array(
+//        'table' => 'commerce_payment_transaction',
+//        'columns'=> array('payment_id' => 'payment_id'),
+//      ),
     ),
     'indexes' => array(
       'trade_no' => array('trade_no'),

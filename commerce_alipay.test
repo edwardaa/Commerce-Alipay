@@ -1,0 +1,150 @@
+<?php
+
+/**
+ * @file
+ * Tests for the Commerce Alipay module.
+ */
+
+/**
+ * Test Alipay basic functionalities.
+ */
+class CommerceAlipayBaseTestCase extends CommerceBaseTestCase {
+
+  const TRADE_SUCCESS = 'TRADE_SUCCESS';
+
+  public function createAlipayIPN($seller_id, $out_trade_no, $total_fee, $trade_status) {
+    return array(
+      'discount' => 0.00,
+      'payment_type' => 1,
+      'subject' => $this->randomString(),
+      'trade_no' => $this->randomName(32),
+      'buyer_email' => $this->generateEmail(),
+      'gmt_create' => gmdate('Y-m-d H:i:s'),
+      'notify_type' => 'trade_status_sync',
+      'quantity' => '1',
+      'out_trade_no' => $out_trade_no,
+      'seller_id' => $seller_id,
+      'notify_time' => gmdate('Y-m-d H:i:s'),
+      'body' => $this->randomString(),
+      'trade_status' => $trade_status,
+      'is_total_fee_adjust' => 'N',
+      'total_fee' => $total_fee,
+      'gmt_payment' => gmdate('Y-m-d H:i:s'),
+      'seller_email' => $this->generateEmail(),
+      'price' => $total_fee,
+      'buyer_id' => $this->randomName(16),
+      'notify_id' => $this->randomName(32),
+      'use_coupon' => 'N',
+      'sign_type' => 'RSA',
+      'sign' => $this->randomName(180),
+      'order_id' => rand(1, 100),
+    );
+  }
+
+  /**
+   * Verify a log entry was entered for a module's status change.
+   * Called in the same way of the expected original watchdog() execution.
+   *
+   * @see ModuleTestCase::assertLogMessage()
+   */
+  function assertLogMessage($type, $message, $variables = array(), $severity = WATCHDOG_NOTICE, $link = '') {
+    $count = db_select('watchdog', 'w')
+      ->condition('type', $type)
+      ->condition('message', $message)
+      ->condition('variables', serialize($variables))
+      ->condition('severity', $severity)
+      ->condition('link', $link)
+      ->countQuery()
+      ->execute()
+      ->fetchField();
+    $this->assertTrue($count > 0, format_string('watchdog table contains @count rows for @message', array('@count' => $count, '@message' => $message)));
+  }
+}
+
+/**
+ * Test Alipay basic functionalities.
+ */
+class CommerceAlipayBasicTestCase extends CommerceAlipayBaseTestCase {
+  private $account;
+  private $payment_method;
+  private $partner;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Commerce Alipay',
+      'description' => 'Test the Commerce Alipay basic.',
+      'group' => 'Commerce Alipay',
+      'dependencies' => array('commerce'),
+    );
+  }
+
+  public function setUp() {
+    $modules = parent::setUpHelper('all',
+      array(
+        'commerce_alipay',
+        'commerce_alipay_direct',
+      )
+    );
+    parent::setUp($modules);
+
+    $this->partner = $this->randomName(16);
+
+    // TODO: Set active to the Alipay payment by default.
+    $payment_methods['alipay_direct']['active'] = TRUE;
+    $this->payment_method = commerce_alipay_method_instance_load('alipay_direct');
+    $this->payment_method['settings'] = array(
+      'ipn_logging' => 'full_log',
+      'fixed_fee' => FALSE,
+      'partner' => $this->partner,
+    );
+
+    $this->account = $this->drupalCreateUser();
+  }
+
+  public function testIPN() {
+    $order = $this->createDummyOrder($this->account->uid, array(), 'checkout_payment');
+    $out_trade_no = commerce_alipay_out_trade_number($order);
+    $total_fee = commerce_alipay_order_total_fee($order);
+    $ipn_trade_success = $this->createAlipayIPN($this->partner, $out_trade_no, $total_fee, self::TRADE_SUCCESS);
+
+    $result = commerce_alipay_process_ipn($this->payment_method, $ipn_trade_success);
+    $this->assertEqual($result, 'failure');
+  }
+
+}
+
+/**
+ * Test Alipay integration with Commerce Marketplace.
+ */
+class CommerceAlipayMarketplaceTestCase extends CommerceAlipayBaseTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => 'Commerce Alipay Marketplace',
+      'description' => 'Test the Commerce Alipay integration with Commerce Marketplace.',
+      'group' => 'Commerce Alipay',
+      'dependencies' => array('commerce', 'commerce_marketplace'),
+    );
+  }
+
+  public function setUp() {
+    $modules = parent::setUpHelper('api',
+      array(
+        'commerce_marketplace',
+        'commerce_marketplace_cart',
+        'commerce_marketplace_checkout',
+        'commerce_marketplace_customer',
+        'commerce_marketplace_line_item',
+        'commerce_marketplace_order',
+        'commerce_marketplace_payment',
+        'commerce_marketplace_product',
+        'commerce_marketplace_shipping',
+        'commerce_store',
+        'commerce_store_ui',
+        'commerce_alipay',
+      )
+    );
+    parent::setUp($modules);
+  }
+
+}

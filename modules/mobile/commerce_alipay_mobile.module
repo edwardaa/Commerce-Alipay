@@ -150,9 +150,6 @@ function commerce_alipay_mobile_signed_data($order, $payment_method) {
  *   The signed data.
  */
 function commerce_alipay_mobile_order_data($order, $settings) {
-  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
-  $amount = $order_wrapper->commerce_order_total->amount->value();
-
   $data = array(
     'service' => ALIPAY_SERVICE_MOBILE,
     'partner' => $settings['partner'],
@@ -160,7 +157,7 @@ function commerce_alipay_mobile_order_data($order, $settings) {
     'payment_type' => '1',
     'notify_url' => commerce_alipay_ipn_url($settings['payment_method']),
     'out_trade_no' => commerce_alipay_out_trade_number($order),
-    'total_fee' => commerce_alipay_amount_to_decimal($amount, ALIPAY_CURRENCY),
+    'total_fee' => commerce_alipay_order_total_fee($order),
     // TODO: remove all reserved keywords like &seller_id, $out_trade_no, etc.
     'subject' => _commerce_alipay_mobile_order_subject($order), // TODO: subject
     'body' => _commerce_alipay_mobile_order_body($order), // TODO: body
