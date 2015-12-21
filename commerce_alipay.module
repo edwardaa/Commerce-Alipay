@@ -415,16 +415,21 @@ function _commerce_alipay_exist_ipn_success() {
  *   The original IPN with some meta data related to local processing.
  */
 function commerce_alipay_ipn_load($id, $type = 'trade_no') {
-  return db_select('commerce_alipay_ipn', 'cai')
+  $ipn = db_select('commerce_alipay_ipn', 'cai')
     ->fields('cai')
     ->condition('cai.' . $type, $id)
-    // Retrieve a last IPN record with cai.ipn_id rather than cai.created,
+    // Retrieve the last IPN record with cai.ipn_id rather than cai.created,
     // since two IPNs such as WAIT_BUYER_PAY and TRADE_SUCCESS may be received
-    // at same time in seconds
+    // at same time in seconds.
     ->orderBy('cai.ipn_id', 'DESC')
     ->range(0, 1)
     ->execute()
     ->fetchAssoc();
+  if ($ipn) {
+    $ipn['data'] = unserialize($ipn['data']);
+  }
+
+  return $ipn;
 }
 
 /**
