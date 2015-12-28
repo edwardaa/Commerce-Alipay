@@ -160,7 +160,7 @@ function commerce_alipay_menu_process_ipn($payment_method = NULL, $debug_ipn = a
   }
 
   // If the payment method specifies full IPN logging, do it now.
-  if (!empty($payment_method['settings']['ipn_logging']) && $payment_method['settings']['ipn_logging'] == 'full_ipn' ) {
+  if (!empty($payment_method['settings']['ipn_logging']) && $payment_method['settings']['ipn_logging'] == 'full_ipn') {
     if (!empty($ipn['trade_no'])) {
       watchdog('commerce_alipay', 'Attempting to process IPN @trade_no. !ipn_data', array('@trade_no' => $ipn['trade_no'], '!ipn_data' => '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
     }
@@ -310,6 +310,12 @@ function commerce_alipay_ipn_process($order, $payment_method, &$ipn) {
     }
   }
 
+  // Get all order ids.
+  $order_ids = array();
+  foreach ($orders as $group_order) {
+    $order_ids[] = $group_order->order_id;
+  }
+
   $remainder = commerce_currency_decimal_to_amount($ipn['total_fee'], ALIPAY_CURRENCY);
   foreach ($orders as $group_order) {
     if (!empty($transactions[$group_order->order_id])) {
@@ -338,8 +344,13 @@ function commerce_alipay_ipn_process($order, $payment_method, &$ipn) {
 
     $transaction->remote_id = $ipn['trade_no'];
     $transaction->remote_status = $ipn['trade_status']; // based on the IPN's trade_status
-    // Append trade_status to the 'payload' key as two IPNs may have same time.
-    $transaction->payload[REQUEST_TIME . '-ipn-' . $ipn['trade_status']] = $ipn;
+    // Append trade_status to the IPN key as two IPNs may have same time.
+    $ipn_key = REQUEST_TIME . '-ipn-' . $ipn['trade_status'];
+    $transaction->payload[$ipn_key] = $ipn;
+    // Replace transactions data with orders data as the transactions are unknown
+    // or not completed until all transaction are saved.
+    unset($transaction->payload[$ipn_key]['data']['transactions']);
+    $transaction->payload[$ipn_key]['data']['orders'] = $order_ids;
 
     // TODO: other status?
     switch ($ipn['trade_status']) {
