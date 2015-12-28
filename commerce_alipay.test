@@ -107,7 +107,7 @@ class CommerceAlipayBasicTestCase extends CommerceAlipayBaseTestCase {
     $total_fee = commerce_alipay_order_total_fee($order);
     $ipn_trade_success = $this->createAlipayIPN($this->partner, $out_trade_no, $total_fee, self::TRADE_SUCCESS);
 
-    $result = commerce_alipay_process_ipn($this->payment_method, $ipn_trade_success);
+    $result = commerce_alipay_menu_process_ipn($this->payment_method, $ipn_trade_success);
     $this->assertEqual($result, 'failure');
   }
 

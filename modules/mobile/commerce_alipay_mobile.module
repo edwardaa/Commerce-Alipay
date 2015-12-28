@@ -45,7 +45,7 @@ function commerce_alipay_mobile_settings_form($settings = array()) {
   $form['partner'] = array(
     '#type' => 'textfield',
     '#title' => t('Alipay partner ID'),
-    '#description' => t('The number starting with 2088'),
+    '#description' => t('The number starting with 2088.'),
     '#default_value' => $settings['partner'],
     '#required' => TRUE,
   );
@@ -63,7 +63,7 @@ function commerce_alipay_mobile_settings_form($settings = array()) {
   $form['rsa_private'] = array(
     '#type' => 'textfield',
     '#title' => t('Merchant RSA private key'),
-    '#description' => t('Merchant RSA private pem file path'),
+    '#description' => t('Merchant RSA private pem file path.'),
     '#default_value' => $settings['rsa_private'],
     '#element_validate' => array('commerce_alipay_mobile_rsa_key_exist'),
     '#required' => TRUE,
@@ -76,7 +76,7 @@ function commerce_alipay_mobile_settings_form($settings = array()) {
   $form['rsa_public'] = array(
     '#type' => 'textfield',
     '#title' => t('Alipay RSA public key'),
-    '#description' => t('Alipay RSA public pem file path'),
+    '#description' => t('Alipay RSA public pem file path.'),
     '#default_value' => $settings['rsa_public'],
     '#element_validate' => array('commerce_alipay_mobile_rsa_key_exist'),
     '#required' => TRUE,
@@ -130,7 +130,7 @@ function commerce_alipay_mobile_signed_data($order, $payment_method) {
   // Return an error if the enabling action's settings haven't been configured.
   if (empty($payment_method['settings']['partner'])) {
     // Alipay Mobile is not configured for use. No Alipay partner has been specified.
-    return FALSE;
+    throw new Exception('Alipay Mobile is not configured for use.');
   }
 
   $settings = array(
@@ -159,8 +159,8 @@ function commerce_alipay_mobile_order_data($order, $settings) {
     'out_trade_no' => commerce_alipay_out_trade_number($order),
     'total_fee' => commerce_alipay_order_total_fee($order),
     // TODO: remove all reserved keywords like &seller_id, $out_trade_no, etc.
-    'subject' => _commerce_alipay_mobile_order_subject($order), // TODO: subject
-    'body' => _commerce_alipay_mobile_order_body($order), // TODO: body
+    'subject' => commerce_alipay_order_subject($order), // TODO: subject
+    'body' => commerce_alipay_order_detail($order), // TODO: body
     '_input_charset' => ALIPAY_CHARSET,
     'it_b_pay' => '15m', // TODO: timeout for stock. does not work for android client?
     // 'paymethod'=> 'expressGateway', // TODO:
@@ -175,24 +175,4 @@ function commerce_alipay_mobile_order_data($order, $settings) {
 
   // Sign request data.
   return commerce_alipay_sign($data, $settings);
-}
-
-function _commerce_alipay_mobile_order_subject($order) {
-  $subject = ';resultStatus={%26支/付subject&seller_id=2088123213';
-  _commerce_alipay_mobile_filter_special_characters($subject);
-  return urlencode($subject);
-}
-
-function _commerce_alipay_mobile_order_body($order) {
-  $subject = '"#out_trade_no=123 &total_fee=123.5';
-  _commerce_alipay_mobile_filter_special_characters($subject);
-  return urlencode($subject);
-}
-
-// TODO:
-function _commerce_alipay_mobile_filter_special_characters(&$subject) {
-  $subject = strtr($subject, array(
-    '/' => ' ',
-    '&' => ' ',
-  ));
 }

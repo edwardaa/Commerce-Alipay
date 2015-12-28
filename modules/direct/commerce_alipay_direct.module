@@ -247,8 +247,8 @@ function commerce_alipay_direct_order_form($form, &$form_state, $order, $setting
     'return_url' => $settings['return'],
     'out_trade_no' => commerce_alipay_out_trade_number($order),
     'total_fee' => commerce_alipay_order_total_fee($order),
-    'subject' => 'donation subject#', // TODO: subject
-    'body' => 'donation body@', // TODO: body
+    'subject' => commerce_alipay_order_subject($order), // TODO: subject
+    'body' => commerce_alipay_order_detail($order), // TODO: body
     'show_url' => 'http://localhost/product/10001', // TODO: show url
     '_input_charset' => ALIPAY_CHARSET,
     'it_b_pay' => '15m', // TODO: timeout for stock
