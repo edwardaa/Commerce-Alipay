@@ -47,7 +47,7 @@ define('ALIPAY_SERVICE_MOBILE', 'mobile.securitypay.pay');
  */
 function commerce_alipay_menu() {
   $items['commerce_alipay/ipn/%commerce_alipay_method_instance'] = array(
-    'page callback' => 'commerce_alipay_process_ipn',
+    'page callback' => 'commerce_alipay_menu_process_ipn',
     'page arguments' => array(2),
     'access callback' => TRUE,
     'type' => MENU_CALLBACK,
